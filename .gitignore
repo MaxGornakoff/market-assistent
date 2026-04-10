@@ -8,5 +8,8 @@ backend/storage/framework/cache/data/
 frontend/node_modules/
 frontend/dist/
 
+ADMIN_CREDENTIALS.local.md
+README.md
+
 .DS_Store
 Thumbs.db

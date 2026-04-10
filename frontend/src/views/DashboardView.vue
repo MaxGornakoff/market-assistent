@@ -1,35 +1,39 @@
 <script setup lang="ts">
-const cards = [
-  {
-    title: 'ERP МойСклад',
-    text: 'Подготовлена зона для синхронизации остатков, закупочных цен и карточек товаров.',
-  },
-  {
-    title: 'Яндекс Маркет',
-    text: 'Здесь будет управление ценами, стратегиями и публикацией данных в маркетплейс.',
-  },
-  {
-    title: 'Аналитика',
-    text: 'Отдельный модуль под маржинальность, рекомендованные цены и контроль конкурентов.',
-  },
-]
+import { computed, defineAsyncComponent, type Component } from 'vue'
+import { useRoute } from 'vue-router'
+
+import {
+  defaultDashboardSection,
+  isDashboardSectionKey,
+  type DashboardSectionKey,
+} from '@/constants/dashboardSections'
+
+const route = useRoute()
+
+const sectionComponents: Record<DashboardSectionKey, Component> = {
+  dashboard: defineAsyncComponent(() => import('@/components/dashboard/sections/DashboardHomeSection.vue')),
+  'yandex-market': defineAsyncComponent(() => import('@/components/dashboard/sections/YandexMarketSection.vue')),
+  moysklad: defineAsyncComponent(() => import('@/components/dashboard/sections/MoySkladSection.vue')),
+  analytics: defineAsyncComponent(() => import('@/components/dashboard/sections/AnalyticsSection.vue')),
+}
+
+const activeSection = computed<DashboardSectionKey>(() => {
+  const section = route.query.section
+
+  if (typeof section === 'string' && isDashboardSectionKey(section)) {
+    return section
+  }
+
+  return defaultDashboardSection
+})
+
+const activeSectionComponent = computed<Component>(() => {
+  return sectionComponents[activeSection.value]
+})
 </script>
 
 <template>
-  <section class="dashboard">
-    <div class="hero">
-      <p class="eyebrow">Market Assistant</p>
-      <h1>Помощник менеджера по ценообразованию</h1>
-      <p class="lead">
-        Базовая структура готова: `Vue 3 + Vite` для интерфейса и `Laravel API` для интеграций и бизнес-логики.
-      </p>
-    </div>
-
-    <div class="card-grid">
-      <article v-for="card in cards" :key="card.title" class="card">
-        <h2>{{ card.title }}</h2>
-        <p>{{ card.text }}</p>
-      </article>
-    </div>
+  <section>
+    <component :is="activeSectionComponent" />
   </section>
 </template>
