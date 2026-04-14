@@ -1,0 +1,23 @@
+[33mcommit 3fd760d1c6074530c3be8f0d259629f6ba8d9407[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m, [m[1;31morigin/main[m[33m)[m
+Author: MaxGornakoff <47008827+MaxGornakoff@users.noreply.github.com>
+Date:   Tue Apr 14 19:31:14 2026 +0300
+
+    Работа над таблицей добавленных продуктов v3
+
+[33mcommit 423c500f54922ce3e63ccbf25d674a8b58cc6440[m
+Author: MaxGornakoff <47008827+MaxGornakoff@users.noreply.github.com>
+Date:   Fri Apr 10 16:57:47 2026 +0300
+
+    Работа над таблицей добавленных продуктов v2
+
+[33mcommit a49ba8a54fcba6d24290d28617ec2392f96dd0e6[m
+Author: MaxGornakoff <47008827+MaxGornakoff@users.noreply.github.com>
+Date:   Fri Apr 10 16:39:01 2026 +0300
+
+    Работа над таблицей добавленных продуктов
+
+[33mcommit 803c79575981009829148521014119d19ba3ed3f[m
+Author: MaxGornakoff <47008827+MaxGornakoff@users.noreply.github.com>
+Date:   Fri Apr 10 10:50:00 2026 +0300
+
+    Создана структура проекта

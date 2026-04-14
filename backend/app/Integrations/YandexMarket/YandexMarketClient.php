@@ -217,6 +217,8 @@ class YandexMarketClient
             unset($metric['_dimensions']);
         }
         unset($metric);
+        return $metrics;
+    }
     /**
      * Преобразует fallbackFields в человекочитаемые подписи
      * @param array $fallbackFields
@@ -233,8 +235,7 @@ class YandexMarketClient
         return array_map(fn($f) => $map[$f] ?? $f, $fallbackFields);
     }
 
-        return $metrics;
-    }
+
 
     /**
      * @return array<int, array<string, mixed>>
