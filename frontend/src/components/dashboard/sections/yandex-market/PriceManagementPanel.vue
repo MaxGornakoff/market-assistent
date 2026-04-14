@@ -15,7 +15,6 @@ interface YandexMarketProduct {
   offer_id: string
   sku: string | null
   category: string | null
-  status: string
   monitoring_enabled: boolean
   campaign_ids: number[]
   created_at: string
@@ -43,13 +42,13 @@ interface YandexMarketCatalogProduct {
   sku: string | null
   category: string | null
   vendor: string | null
-  status: string
   market_sku: string | null
   campaign_ids: number[]
 }
 
 type TableQuickFilter = 'all' | 'enabled' | 'disabled'
-type ColumnKey =
+
+export type ColumnKey =
   | 'name'
   | 'initial_price'
   | 'market_price'
@@ -59,8 +58,9 @@ type ColumnKey =
   | 'sku'
   | 'category'
   | 'campaigns'
-  | 'status'
   | 'monitoring_enabled'
+  | 'delete'
+  | 'created_at'
   | 'delete'
   | 'created_at'
 
@@ -80,7 +80,6 @@ const defaultColumnOrder: ColumnKey[] = [
   'sku',
   'category',
   'campaigns',
-  'status',
   'monitoring_enabled',
   'delete',
   'created_at',
@@ -96,7 +95,6 @@ const columnDefinitions: TableColumnDefinition[] = [
   { key: 'sku', label: 'Артикул Маркета' },
   { key: 'category', label: 'Категория' },
   { key: 'campaigns', label: 'Кампании' },
-  { key: 'status', label: 'Статус' },
   { key: 'monitoring_enabled', label: 'Отслеживать' },
   { key: 'delete', label: 'Удалить' },
   { key: 'created_at', label: 'Добавлен' },
@@ -112,7 +110,6 @@ const defaultColumnVisibility: Record<ColumnKey, boolean> = {
   sku: true,
   category: true,
   campaigns: true,
-  status: true,
   monitoring_enabled: true,
   delete: true,
   created_at: true,
@@ -257,7 +254,6 @@ const filteredProducts = computed(() => {
       product.offer_id,
       product.sku ?? '',
       product.category ?? '',
-      product.status,
       product.campaign_ids?.join(' ') ?? '',
       String(product.initial_price ?? ''),
       String(product.market_price ?? ''),
@@ -838,14 +834,7 @@ onUnmounted(() => {
                 {{ selectedProduct.recommended_market_price_note || 'Цена, при которой выплата после комиссий ≈ начальной цене' }}
               </div>
             </div>
-            <div class="rounded-2xl bg-slate-50 p-4">
-              <div class="text-xs font-medium text-slate-500">Статус</div>
-              <div class="mt-1">
-                <span class="inline-flex rounded-full bg-slate-200 px-2.5 py-1 text-xs font-semibold text-slate-700">
-                  {{ selectedProduct.status }}
-                </span>
-              </div>
-            </div>
+            <!-- Статус удалён -->
             <div class="rounded-2xl bg-slate-50 p-4">
               <div class="text-xs font-medium text-slate-500">Отслеживание</div>
               <div class="mt-1">
@@ -1209,7 +1198,7 @@ onUnmounted(() => {
             aria-label="Настроить столбцы"
             @click="openColumnSettings"
           >
-            <svg class="h-[18px] w-[18px] transition duration-150 group-hover:scale-105" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <svg class="h-4.5 w-4.5 transition duration-150 group-hover:scale-105" viewBox="0 0 24 24" fill="none" aria-hidden="true">
               <path d="M4.75 6.75H9.25" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
               <path d="M4.75 12H14.25" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
               <path d="M4.75 17.25H11.25" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
@@ -1226,7 +1215,7 @@ onUnmounted(() => {
             aria-label="Обновить таблицу"
             @click="loadProducts"
           >
-            <svg class="h-[18px] w-[18px] transition-transform duration-200 group-hover:rotate-180" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <svg class="h-4.5 w-4.5 transition-transform duration-200 group-hover:rotate-180" viewBox="0 0 24 24" fill="none" aria-hidden="true">
               <path d="M20 11.5A8.5 8.5 0 1 1 17.2 5.2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
               <path d="M20 4.75V8.5H16.25" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
@@ -1261,7 +1250,7 @@ onUnmounted(() => {
       </div>
 
       <div v-else class="w-full max-w-full overflow-x-auto overscroll-x-contain pb-2">
-        <table class="min-w-[1700px] table-auto text-left text-sm">
+        <table class="min-w-425 table-auto text-left text-sm">
           <thead class="bg-slate-200">
             <tr class="text-slate-500">
               <th
@@ -1297,11 +1286,11 @@ onUnmounted(() => {
               @keydown.enter.prevent="openProductDetails(product)"
             >
               <template v-for="column in visibleColumns" :key="`${product.id}-${column.key}`">
-                <td v-if="column.key === 'name'" class="min-w-[280px] px-3 py-3 font-medium text-slate-900 align-top">
+                <td v-if="column.key === 'name'" class="min-w-70 px-3 py-3 font-medium text-slate-900 align-top">
                   <div>{{ product.name }}</div>
                 </td>
 
-                <td v-else-if="column.key === 'initial_price'" class="min-w-[180px] px-3 py-3 align-top whitespace-nowrap">
+                <td v-else-if="column.key === 'initial_price'" class="min-w-40 max-w-50 px-3 py-3 align-top whitespace-nowrap">
                   <div class="font-medium text-slate-900">
                     {{ formatMoney(product.initial_price, product.initial_price_currency || 'RUR') }}
                   </div>
@@ -1310,7 +1299,7 @@ onUnmounted(() => {
                   </div>
                 </td>
 
-                <td v-else-if="column.key === 'market_price'" class="min-w-[180px] px-3 py-3 align-top whitespace-nowrap">
+                <td v-else-if="column.key === 'market_price'" class="min-w-40 max-w-50 px-3 py-3 align-top whitespace-nowrap">
                   <div class="font-medium text-slate-900">
                     {{ formatMoney(product.market_price, product.market_price_currency || 'RUR') }}
                   </div>
@@ -1319,30 +1308,17 @@ onUnmounted(() => {
                   </div>
                 </td>
 
-                <td v-else-if="column.key === 'market_service_cost'" class="min-w-[300px] max-w-[300px] px-3 py-3 align-top whitespace-normal break-words">
-                  <div class="font-medium text-slate-900 whitespace-nowrap">
+                <td v-else-if="column.key === 'market_service_cost'" class="min-w-40 max-w-50 px-3 py-3 align-top whitespace-normal wrap-break-word">
+                  <div class=" font-medium text-slate-900 whitespace-nowrap">
                     {{ formatMoney(product.market_service_cost, product.market_service_cost_currency || 'RUR') }}
                   </div>
-                  <div class="mt-0.5 text-xs leading-4 text-slate-400 whitespace-normal break-words flex items-center gap-1">
-                    <span v-if="product.market_service_cost_has_all_real_data">
-                      расчет с учетом реальных данных
-                    </span>
-                    <span v-else>
-                      Отсутствуют некоторые данные
-                      <span class="inline-block align-middle cursor-pointer group relative" tabindex="0">
-                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 text-yellow-500 ml-1" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M12 5a7 7 0 100 14 7 7 0 000-14z" /></svg>
-                        <div class="absolute left-1/2 z-10 mt-2 w-56 -translate-x-1/2 rounded-xl border border-yellow-200 bg-white p-3 text-xs text-yellow-900 shadow-lg opacity-0 group-hover:opacity-100 group-focus:opacity-100 pointer-events-none group-hover:pointer-events-auto group-focus:pointer-events-auto transition-opacity duration-200" style="min-width:180px;">
-                          <div class="font-semibold mb-1">Не хватает данных:</div>
-                          <ul class="list-disc pl-4">
-                            <li v-for="field in product.market_service_cost_missing_data" :key="field">{{ field }}</li>
-                          </ul>
-                        </div>
-                      </span>
-                    </span>
+                  <div class="mt-0.5 text-xs leading-4 text-slate-400 whitespace-normal wrap-break-word flex items-center gap-1">
+                    <!-- Информация о детализации расходов убрана, так как поля больше нет -->
+                      {{ product.market_service_cost_note || 'Оценка по API Маркета' }}
                   </div>
                 </td>
 
-                <td v-else-if="column.key === 'recommended_market_price'" class="min-w-[210px] px-3 py-3 align-top whitespace-nowrap">
+                <td v-else-if="column.key === 'recommended_market_price'" class="min-w-40 max-w-50 px-3 py-3 align-top ">
                   <div class="font-medium text-slate-900">
                     {{ formatMoney(getRecommendedMarketPrice(product), product.recommended_market_price_currency || product.initial_price_currency || product.market_service_cost_currency || 'RUR') }}
                   </div>
@@ -1351,13 +1327,13 @@ onUnmounted(() => {
                   </div>
                 </td>
 
-                <td v-else-if="column.key === 'offer_id'" class="min-w-[140px] px-3 py-3 align-top whitespace-nowrap">{{ product.offer_id }}</td>
-                <td v-else-if="column.key === 'sku'" class="min-w-[140px] px-3 py-3 align-top whitespace-nowrap">{{ product.sku || '—' }}</td>
-                <td v-else-if="column.key === 'category'" class="min-w-[260px] px-3 py-3 align-top">
-                  <div v-if="splitCategoryPath(product.category).length" class="max-w-[260px]">
+                <td v-else-if="column.key === 'offer_id'" class="min-w-35 px-3 py-3 align-top whitespace-nowrap">{{ product.offer_id }}</td>
+                <td v-else-if="column.key === 'sku'" class="min-w-35 px-3 py-3 align-top whitespace-nowrap">{{ product.sku || '—' }}</td>
+                <td v-else-if="column.key === 'category'" class="min-w-65 px-3 py-3 align-top">
+                  <div v-if="splitCategoryPath(product.category).length" class="max-w-65">
                     <div
                       :ref="(el) => setCategoryPreviewRef(product.id, el as Element | null)"
-                      class="flex max-h-[3.25rem] flex-wrap content-start gap-1 overflow-hidden"
+                      class="flex max-h-13 flex-wrap content-start gap-1 overflow-hidden"
                     >
                       <span
                         v-for="part in previewCategoryPath(product.category, product.id)"
@@ -1378,20 +1354,16 @@ onUnmounted(() => {
                   <span v-else>—</span>
                 </td>
 
-                <td v-else-if="column.key === 'campaigns'" class="min-w-[160px] px-3 py-3 align-top whitespace-nowrap">
+                <td v-else-if="column.key === 'campaigns'" class="min-w-40 px-3 py-3 align-top whitespace-nowrap">
                   <span v-if="product.campaign_ids?.length">
                     {{ product.campaign_ids.join(', ') }}
                   </span>
                   <span v-else>—</span>
                 </td>
 
-                <td v-else-if="column.key === 'status'" class="min-w-[140px] px-3 py-3 align-top whitespace-nowrap">
-                  <span class="inline-flex rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700">
-                    {{ product.status }}
-                  </span>
-                </td>
+                <!-- status column removed -->
 
-                <td v-else-if="column.key === 'monitoring_enabled'" class="min-w-[150px] px-3 py-3 align-top whitespace-nowrap" @click.stop>
+                <td v-else-if="column.key === 'monitoring_enabled'" class="min-w-37.5 px-3 py-3 align-top whitespace-nowrap" @click.stop>
                   <label class="inline-flex cursor-pointer items-center gap-2" @click.stop>
                     <input
                       :checked="product.monitoring_enabled"
@@ -1407,7 +1379,7 @@ onUnmounted(() => {
                   </label>
                 </td>
 
-                <td v-else-if="column.key === 'delete'" class="min-w-[96px] px-3 py-3 text-center align-top" @click.stop>
+                <td v-else-if="column.key === 'delete'" class="min-w-24 px-3 py-3 text-center align-top" @click.stop>
                   <button
                     type="button"
                     class="group inline-flex h-10 w-10 cursor-pointer items-center justify-center rounded-xl border border-rose-200 bg-white text-rose-500 shadow-sm transition duration-150 hover:-translate-y-0.5 hover:border-rose-300 hover:bg-rose-50 hover:text-rose-600 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-60"
@@ -1425,7 +1397,7 @@ onUnmounted(() => {
                   </button>
                 </td>
 
-                <td v-else-if="column.key === 'created_at'" class="min-w-[130px] px-3 py-3 align-top whitespace-nowrap">{{ formatDate(product.created_at) }}</td>
+                <td v-else-if="column.key === 'created_at'" class="min-w-32.5 px-3 py-3 align-top whitespace-nowrap">{{ formatDate(product.created_at) }}</td>
               </template>
             </tr>
           </tbody>

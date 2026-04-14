@@ -567,7 +567,7 @@ class YandexMarketClient
                 'recommended_market_price' => $recommendedPrice,
                 'recommended_market_price_currency' => $currency,
                 'recommended_market_net_payout' => $initialPrice,
-                'recommended_market_price_note' => 'Цена рассчитана ускоренно в 2 шага: после комиссий выплата остаётся на уровне начальной цены.',
+                'recommended_market_price_note' => 'Минимальная рекомендованная цена безубыточности',
             ];
         }
 

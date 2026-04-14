@@ -14,7 +14,6 @@ class YandexMarketProduct extends Model
         'offer_id',
         'sku',
         'category',
-        'status',
         'monitoring_enabled',
         'campaign_ids',
         'created_by',
