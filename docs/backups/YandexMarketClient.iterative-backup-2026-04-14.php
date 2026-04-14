@@ -105,12 +105,6 @@ class YandexMarketClient
                 $width = data_get($dimensions, 'width');
                 $height = data_get($dimensions, 'height');
                 $weight = data_get($dimensions, 'weight');
-                $fallbackFields = self::dimensionFallbackFields([
-                    'length' => $length,
-                    'width' => $width,
-                    'height' => $height,
-                    'weight' => $weight,
-                ]);
                 $b2cUrl = Arr::get(
                     collect(data_get($item, 'showcaseUrls', []))
                         ->firstWhere('showcaseType', 'B2C') ?? [],
@@ -149,8 +143,7 @@ class YandexMarketClient
                         'width' => self::positiveFloatOrDefault($width, 10.0),
                         'height' => self::positiveFloatOrDefault($height, 10.0),
                         'weight' => self::positiveFloatOrDefault($weight, 0.5),
-                        'has_real_dimensions' => $fallbackFields === [],
-                        'fallback_fields' => $fallbackFields,
+                        'has_real_dimensions' => self::hasPositiveDimensions($length, $width, $height, $weight),
                     ],
                 ];
             })
@@ -186,15 +179,6 @@ class YandexMarketClient
                 $metric['recommended_market_price_currency'] = $recommended['recommended_market_price_currency'];
                 $metric['recommended_market_net_payout'] = $recommended['recommended_market_net_payout'];
                 $metric['recommended_market_price_note'] = $recommended['recommended_market_price_note'];
-                // Data quality fields
-                $fallbackFields = $metrics[$offerId]['_dimensions']['fallback_fields'] ?? [];
-                $metric['market_service_cost_has_all_real_data'] = empty($fallbackFields);
-                $metric['market_service_cost_missing_data'] = self::fallbackFieldsToLabels($fallbackFields);
-                if (!empty($fallbackFields)) {
-                    $metric['market_service_cost_note'] = 'Отсутствуют некоторые данные';
-                } else {
-                    $metric['market_service_cost_note'] = 'Расчет с учетом реальных данных';
-                }
             } else {
                 $tariff = $tariffsByOfferId[$offerId] ?? null;
 
@@ -203,35 +187,12 @@ class YandexMarketClient
                     $metric['market_service_cost_currency'] = $tariff['market_service_cost_currency'];
                     $metric['market_service_cost_breakdown'] = $tariff['market_service_cost_breakdown'];
                     $metric['market_service_cost_note'] = $tariff['market_service_cost_note'];
-                    $fallbackFields = $metrics[$offerId]['_dimensions']['fallback_fields'] ?? [];
-                    $metric['market_service_cost_has_all_real_data'] = empty($fallbackFields);
-                    $metric['market_service_cost_missing_data'] = self::fallbackFieldsToLabels($fallbackFields);
-                    if (!empty($fallbackFields)) {
-                        $metric['market_service_cost_note'] = 'Отсутствуют некоторые данные';
-                    } else {
-                        $metric['market_service_cost_note'] = 'Расчет с учетом реальных данных';
-                    }
                 }
             }
 
             unset($metric['_dimensions']);
         }
         unset($metric);
-    /**
-     * Преобразует fallbackFields в человекочитаемые подписи
-     * @param array $fallbackFields
-     * @return array
-     */
-    protected static function fallbackFieldsToLabels(array $fallbackFields): array
-    {
-        $map = [
-            'length' => 'Длина',
-            'width' => 'Ширина',
-            'height' => 'Высота',
-            'weight' => 'Вес',
-        ];
-        return array_map(fn($f) => $map[$f] ?? $f, $fallbackFields);
-    }
 
         return $metrics;
     }
@@ -473,7 +434,7 @@ class YandexMarketClient
                 ])
                 ->values();
 
-            $fallbackFields = data_get($metrics, $offerId . '._dimensions.fallback_fields', []);
+            $hasRealDimensions = (bool) data_get($metrics, $offerId . '._dimensions.has_real_dimensions', false);
             $usesInitialPrice = filled(data_get($metrics, $offerId . '.initial_price'));
             $noteBase = $usesInitialPrice
                 ? 'Оценка рассчитана по тарифам API Маркета на основе цены продажи из ERP МойСклад'
@@ -483,7 +444,9 @@ class YandexMarketClient
                 'market_service_cost' => $tariffs->sum('amount'),
                 'market_service_cost_currency' => (string) ($tariffs->first()['currency'] ?? 'RUR'),
                 'market_service_cost_breakdown' => $tariffs->all(),
-                'market_service_cost_note' => $noteBase . self::dimensionFallbackNote(is_array($fallbackFields) ? $fallbackFields : []),
+                'market_service_cost_note' => $hasRealDimensions
+                    ? $noteBase . '.'
+                    : $noteBase . ' с базовыми габаритами товара.',
             ];
         }
 
@@ -496,7 +459,7 @@ class YandexMarketClient
      */
     protected function calculateRecommendedPrices(array $metrics): array
     {
-        $basePrices = [];
+        $candidatePrices = [];
 
         foreach ($metrics as $offerId => $metric) {
             $initialPrice = (float) ($metric['initial_price'] ?? 0);
@@ -506,67 +469,63 @@ class YandexMarketClient
                 continue;
             }
 
-            $basePrices[$offerId] = round($initialPrice, 2);
+            $candidatePrices[$offerId] = round($initialPrice, 2);
         }
 
-        if ($basePrices === []) {
+        if ($candidatePrices === []) {
             return [];
         }
 
-        $firstTariffs = $this->calculateTariffs($metrics, $basePrices);
+        $maxIterations = 6;
 
-        $secondPrices = [];
+        for ($iteration = 0; $iteration < $maxIterations; $iteration++) {
+            $tariffs = $this->calculateTariffs($metrics, $candidatePrices);
+            $hasChanges = false;
 
-        foreach ($basePrices as $offerId => $basePrice) {
-            $firstCost = round((float) data_get($firstTariffs, $offerId . '.market_service_cost', 0), 2);
-            $secondPrices[$offerId] = round(max($basePrice + $firstCost, $basePrice), 2);
-        }
+            foreach ($candidatePrices as $offerId => $candidatePrice) {
+                $initialPrice = (float) data_get($metrics, $offerId . '.initial_price', 0);
+                $serviceCost = (float) data_get($tariffs, $offerId . '.market_service_cost', 0);
+                $nextPrice = round($initialPrice + $serviceCost, 2);
 
-        $secondTariffs = $this->calculateTariffs($metrics, $secondPrices);
-        $result = [];
-
-        foreach ($basePrices as $offerId => $basePrice) {
-            $initialPrice = round((float) data_get($metrics, $offerId . '.initial_price', 0), 2);
-            $firstCost = round((float) data_get($firstTariffs, $offerId . '.market_service_cost', 0), 2);
-            $secondPrice = round((float) ($secondPrices[$offerId] ?? $basePrice), 2);
-            $secondCost = round((float) data_get($secondTariffs, $offerId . '.market_service_cost', $firstCost), 2);
-
-            $slope = 0.0;
-
-            if ($secondPrice > $basePrice) {
-                $slope = ($secondCost - $firstCost) / ($secondPrice - $basePrice);
-            } elseif ($basePrice > 0) {
-                $slope = $firstCost / $basePrice;
+                if (abs($nextPrice - $candidatePrice) >= 0.01) {
+                    $candidatePrices[$offerId] = $nextPrice;
+                    $hasChanges = true;
+                }
             }
 
-            $slope = max(0.0, min($slope, 0.95));
-            $fixedComponent = max(0.0, round($firstCost - ($slope * $basePrice), 2));
-            $recommendedPrice = round(max($initialPrice, ($initialPrice + $fixedComponent) / max(1 - $slope, 0.05)), 2);
-            $serviceCost = round(max($recommendedPrice - $initialPrice, 0), 2);
+            if (! $hasChanges) {
+                break;
+            }
+        }
+
+        $finalTariffs = $this->calculateTariffs($metrics, $candidatePrices);
+        $result = [];
+
+        foreach ($candidatePrices as $offerId => $candidatePrice) {
+            $initialPrice = round((float) data_get($metrics, $offerId . '.initial_price', 0), 2);
+            $serviceCost = round((float) data_get($finalTariffs, $offerId . '.market_service_cost', 0), 2);
+            $finalRecommendedPrice = round($initialPrice + $serviceCost, 2);
             $currency = (string) (
-                data_get($secondTariffs, $offerId . '.market_service_cost_currency')
-                ?: data_get($firstTariffs, $offerId . '.market_service_cost_currency')
+                data_get($finalTariffs, $offerId . '.market_service_cost_currency')
                 ?: data_get($metrics, $offerId . '.initial_price_currency')
                 ?: data_get($metrics, $offerId . '.market_price_currency')
                 ?: 'RUR'
             );
-            $fallbackFields = data_get($metrics, $offerId . '._dimensions.fallback_fields', []);
-            $breakdownSource = data_get($secondTariffs, $offerId . '.market_service_cost_breakdown')
-                ?: data_get($firstTariffs, $offerId . '.market_service_cost_breakdown', []);
+            $hasRealDimensions = (bool) data_get($metrics, $offerId . '._dimensions.has_real_dimensions', false);
+            $serviceCostBreakdown = data_get($finalTariffs, $offerId . '.market_service_cost_breakdown', []);
+            $serviceCostNote = $hasRealDimensions
+                ? 'Комиссии рассчитаны по API Маркета для рекомендованной цены продажи.'
+                : 'Комиссии рассчитаны по API Маркета для рекомендованной цены продажи с базовыми габаритами товара.';
 
             $result[$offerId] = [
                 'market_service_cost' => $serviceCost,
                 'market_service_cost_currency' => $currency,
-                'market_service_cost_breakdown' => self::scaleTariffBreakdown(
-                    is_array($breakdownSource) ? $breakdownSource : [],
-                    $serviceCost,
-                ),
-                'market_service_cost_note' => 'Комиссии оценены по ускоренной модели на основе тарифов API Маркета для рекомендованной цены.'
-                    . self::dimensionFallbackNote(is_array($fallbackFields) ? $fallbackFields : []),
-                'recommended_market_price' => $recommendedPrice,
+                'market_service_cost_breakdown' => is_array($serviceCostBreakdown) ? $serviceCostBreakdown : [],
+                'market_service_cost_note' => $serviceCostNote,
+                'recommended_market_price' => $finalRecommendedPrice,
                 'recommended_market_price_currency' => $currency,
-                'recommended_market_net_payout' => $initialPrice,
-                'recommended_market_price_note' => 'Цена рассчитана ускоренно в 2 шага: после комиссий выплата остаётся на уровне начальной цены.',
+                'recommended_market_net_payout' => round($finalRecommendedPrice - $serviceCost, 2),
+                'recommended_market_price_note' => 'Цена подобрана итерационно: после комиссий Маркета выплата остаётся на уровне начальной цены.',
             ];
         }
 
@@ -602,88 +561,6 @@ class YandexMarketClient
         $normalized = (float) $value;
 
         return $normalized > 0 ? $normalized : $default;
-    }
-
-    /**
-     * @param  array<string, mixed>  $dimensions
-     * @return array<int, string>
-     */
-    protected static function dimensionFallbackFields(array $dimensions): array
-    {
-        $fallbackFields = [];
-
-        foreach ($dimensions as $field => $value) {
-            if (! is_numeric($value) || (float) $value <= 0) {
-                $fallbackFields[] = (string) $field;
-            }
-        }
-
-        return $fallbackFields;
-    }
-
-    /**
-     * @param  array<int, string>  $fallbackFields
-     */
-    protected static function dimensionFallbackNote(array $fallbackFields): string
-    {
-        if ($fallbackFields === []) {
-            return '';
-        }
-
-        $labels = array_map(
-            static fn (string $field): string => match ($field) {
-                'length' => 'длины',
-                'width' => 'ширины',
-                'height' => 'высоты',
-                'weight' => 'веса',
-                default => $field,
-            },
-            $fallbackFields,
-        );
-
-        if (count($labels) === 4) {
-            return ' Использованы базовые значения длины, ширины, высоты и веса товара.';
-        }
-
-        return ' Использованы базовые значения для: ' . implode(', ', $labels) . '.';
-    }
-
-    /**
-     * @param  array<int, array<string, mixed>>  $breakdown
-     * @return array<int, array<string, mixed>>
-     */
-    protected static function scaleTariffBreakdown(array $breakdown, float $targetTotal): array
-    {
-        if ($breakdown === [] || $targetTotal <= 0) {
-            return $breakdown;
-        }
-
-        $currentTotal = (float) collect($breakdown)->sum(
-            static fn (array $item): float => (float) ($item['amount'] ?? 0),
-        );
-
-        if ($currentTotal <= 0) {
-            return $breakdown;
-        }
-
-        $factor = $targetTotal / $currentTotal;
-        $scaled = [];
-        $runningTotal = 0.0;
-        $lastIndex = array_key_last($breakdown);
-
-        foreach ($breakdown as $index => $item) {
-            $amount = round((float) ($item['amount'] ?? 0) * $factor, 2);
-
-            if ($index === $lastIndex) {
-                $amount = round($targetTotal - $runningTotal, 2);
-            }
-
-            $runningTotal += $amount;
-            $item['amount'] = $amount;
-            $scaled[] = $item;
-        }
-
-        return $scaled;
     }
 
     protected static function hasPositiveDimensions(mixed ...$values): bool

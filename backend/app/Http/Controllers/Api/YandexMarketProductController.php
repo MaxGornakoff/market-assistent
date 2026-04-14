@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Integrations\MoySklad\MoySkladClient;
 use App\Integrations\YandexMarket\YandexMarketClient;
 use App\Models\YandexMarketProduct;
 use App\Services\Integrations\IntegrationSettingsService;
@@ -13,7 +14,7 @@ use RuntimeException;
 
 class YandexMarketProductController extends Controller
 {
-    public function index(): JsonResponse
+    public function index(YandexMarketClient $client, MoySkladClient $moySkladClient): JsonResponse
     {
         $products = YandexMarketProduct::query()
             ->latest('id')
@@ -29,8 +30,55 @@ class YandexMarketProductController extends Controller
                 'created_at',
             ]);
 
+        $pricesByOfferId = [];
+        $metricsByOfferId = [];
+
+        if ($products->isNotEmpty() && $moySkladClient->isConfigured()) {
+            try {
+                $pricesByOfferId = $moySkladClient->getSalePricesByCodes($products->pluck('offer_id')->all());
+            } catch (RuntimeException|RequestException $exception) {
+                report($exception);
+            }
+        }
+
+        if ($products->isNotEmpty() && $client->isConfigured()) {
+            try {
+                $metricsByOfferId = $client->getOfferMetrics($products->pluck('offer_id')->all(), $pricesByOfferId);
+            } catch (RuntimeException|RequestException $exception) {
+                report($exception);
+            }
+        }
+
+        $defaultMetrics = [
+            'initial_price' => null,
+            'initial_price_currency' => null,
+            'market_price' => null,
+            'market_price_currency' => null,
+            'market_price_updated_at' => null,
+            'market_service_cost' => null,
+            'market_service_cost_currency' => null,
+            'market_service_cost_breakdown' => [],
+            'market_service_cost_note' => null,
+            'market_service_cost_has_all_real_data' => null,
+            'market_service_cost_missing_data' => null,
+            'recommended_market_price' => null,
+            'recommended_market_price_currency' => null,
+            'recommended_market_net_payout' => null,
+            'recommended_market_price_note' => null,
+            'market_category_id' => null,
+            'market_sku' => null,
+            'market_url' => null,
+        ];
+
         return response()->json([
-            'products' => $products,
+            'products' => $products
+                ->map(fn (YandexMarketProduct $product): array => array_merge(
+                    $product->toArray(),
+                    $defaultMetrics,
+                    $pricesByOfferId[$product->offer_id] ?? [],
+                    $metricsByOfferId[$product->offer_id] ?? [],
+                ))
+                ->values(),
         ]);
     }
 
