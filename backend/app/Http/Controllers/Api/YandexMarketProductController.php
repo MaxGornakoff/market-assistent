@@ -41,8 +41,21 @@ class YandexMarketProductController extends Controller
         }
 
         if ($products->isNotEmpty() && $client->isConfigured()) {
+            $campaignIds = $products
+                ->pluck('campaign_ids')
+                ->flatten()
+                ->map(static fn (mixed $id): int => (int) $id)
+                ->filter(static fn (int $id): bool => $id > 0)
+                ->unique()
+                ->values()
+                ->all();
+
             try {
-                $metricsByOfferId = $client->getOfferMetrics($products->pluck('offer_id')->all(), $pricesByOfferId);
+                $metricsByOfferId = $client->getOfferMetrics(
+                    $products->pluck('offer_id')->all(),
+                    $pricesByOfferId,
+                    $campaignIds,
+                );
             } catch (RuntimeException|RequestException $exception) {
                 report($exception);
             }
@@ -67,6 +80,8 @@ class YandexMarketProductController extends Controller
             'market_category_id' => null,
             'market_sku' => null,
             'market_url' => null,
+            'market_stocks_total' => null,
+            'market_stocks_by_warehouse' => [],
         ];
 
         return response()->json([

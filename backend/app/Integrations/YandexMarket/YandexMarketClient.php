@@ -18,6 +18,11 @@ class YandexMarketClient
      */
     private ?array $settingsCache = null;
 
+    /**
+     * @var array<string, string>
+     */
+    private array $warehouseNamesCache = [];
+
     public function __construct(
         private readonly HttpFactory $http,
         private readonly IntegrationSettingsService $settingsService,
@@ -72,7 +77,7 @@ class YandexMarketClient
      * @param  array<string, array<string, mixed>>  $pricesByOfferId
      * @return array<string, array<string, mixed>>
      */
-    public function getOfferMetrics(array $offerIds, array $pricesByOfferId = []): array
+    public function getOfferMetrics(array $offerIds, array $pricesByOfferId = [], array $campaignIds = []): array
     {
         $offerIds = array_values(array_filter(array_map(
             static fn (mixed $offerId): string => trim((string) $offerId),
@@ -144,6 +149,8 @@ class YandexMarketClient
                         : (filled(data_get($item, 'showcaseUrls.0.showcaseUrl'))
                             ? (string) data_get($item, 'showcaseUrls.0.showcaseUrl')
                             : null),
+                    'market_stocks_total' => null,
+                    'market_stocks_by_warehouse' => [],
                     '_dimensions' => [
                         'length' => self::positiveFloatOrDefault($length, 10.0),
                         'width' => self::positiveFloatOrDefault($width, 10.0),
@@ -155,6 +162,12 @@ class YandexMarketClient
                 ];
             })
             ->all();
+
+        try {
+            $stocksByOfferId = $this->fetchStocksByOfferIds(array_keys($metrics), $campaignIds);
+        } catch (\Throwable) {
+            $stocksByOfferId = [];
+        }
 
         try {
             $recommendedByOfferId = $this->calculateRecommendedPrices($metrics);
@@ -175,6 +188,13 @@ class YandexMarketClient
         }
 
         foreach ($metrics as $offerId => &$metric) {
+            $stocks = $stocksByOfferId[$offerId] ?? null;
+
+            if ($stocks !== null) {
+                $metric['market_stocks_total'] = $stocks['market_stocks_total'];
+                $metric['market_stocks_by_warehouse'] = $stocks['market_stocks_by_warehouse'];
+            }
+
             $recommended = $recommendedByOfferId[$offerId] ?? null;
 
             if ($recommended !== null) {
@@ -218,6 +238,316 @@ class YandexMarketClient
         }
         unset($metric);
         return $metrics;
+    }
+
+    /**
+     * Получить читаемое название склада
+     */
+    private function getWarehouseDisplayName(int | string | null $warehouseId, ?string $warehouseNameFromApi = null): string
+    {
+        // Маппинг известных складов
+        $warehouseMapping = [
+            760884 => 'Экспресс',
+            1416689 => 'FBS',
+        ];
+
+        // Если API вернул название, используем его
+        if (filled($warehouseNameFromApi)) {
+            return $warehouseNameFromApi;
+        }
+
+        // Проверяем маппинг известных складов
+        if ($warehouseId && isset($warehouseMapping[$warehouseId])) {
+            return $warehouseMapping[$warehouseId];
+        }
+
+        // Используем кэшированное название, если есть
+        $cacheKey = 'warehouse_' . $warehouseId;
+        if (isset($this->warehouseNamesCache[$cacheKey])) {
+            return $this->warehouseNamesCache[$cacheKey];
+        }
+
+        // Если ID есть, используем формат "Склад {ID}"
+        if ($warehouseId) {
+            $displayName = 'Склад ' . $warehouseId;
+        } else {
+            $displayName = 'Основной склад';
+        }
+
+        $this->warehouseNamesCache[$cacheKey] = $displayName;
+        return $displayName;
+    }
+
+    /**
+     * @param  array<int, string>  $offerIds
+     * @param  array<int, int>  $campaignIds
+     * @return array<string, array<string, mixed>>
+     */
+    protected function fetchStocksByOfferIds(array $offerIds, array $campaignIds = []): array
+    {
+        $offerIds = array_values(array_filter(array_map(
+            static fn (mixed $offerId): string => trim((string) $offerId),
+            $offerIds,
+        )));
+
+        if ($offerIds === []) {
+            return [];
+        }
+
+        $campaignIds = array_values(array_filter(array_map(
+            static fn (mixed $id): int => (int) $id,
+            $campaignIds !== [] ? $campaignIds : $this->activeCampaignIds(),
+        ), static fn (int $id): bool => $id > 0));
+
+        if ($campaignIds === []) {
+            return [];
+        }
+
+        $aggregated = [];
+
+        foreach ($campaignIds as $campaignId) {
+            foreach (array_chunk(array_values(array_unique($offerIds)), 200) as $chunk) {
+                $response = $this->client()
+                    ->post("/v2/campaigns/{$campaignId}/offers/stocks", [
+                        'offerIds' => $chunk,
+                    ])
+                    ->throw()
+                    ->json();
+
+                $result = Arr::get($response, 'result', $response);
+                $warehouses = Arr::get($result, 'warehouses', []);
+
+                if (is_array($warehouses) && $warehouses !== []) {
+                    foreach ($warehouses as $warehousePayload) {
+                        if (! is_array($warehousePayload)) {
+                            continue;
+                        }
+
+                        $warehouseId = data_get($warehousePayload, 'warehouseId');
+                        $apiWarehouseName = data_get($warehousePayload, 'warehouseName')
+                            ?? data_get($warehousePayload, 'name');
+                        $warehouseName = $this->getWarehouseDisplayName($warehouseId, $apiWarehouseName);
+
+                        $offersInWarehouse = data_get($warehousePayload, 'offers', []);
+
+                        foreach ((array) $offersInWarehouse as $offerStock) {
+                            if (! is_array($offerStock)) {
+                                continue;
+                            }
+
+                            $offerId = trim((string) (
+                                data_get($offerStock, 'offerId')
+                                ?? data_get($offerStock, 'offer.offerId')
+                                ?? data_get($offerStock, 'sku')
+                                ?? data_get($offerStock, 'shopSku')
+                            ));
+
+                            if ($offerId === '') {
+                                continue;
+                            }
+
+                            if (! array_key_exists($offerId, $aggregated)) {
+                                $aggregated[$offerId] = [];
+                            }
+
+                            $amount = self::extractStockAmountFromTypedStocks((array) data_get($offerStock, 'stocks', []));
+
+                            if ($amount === null) {
+                                $amount = self::extractStockAmount($offerStock);
+                            }
+
+                            if ($amount === null) {
+                                continue;
+                            }
+
+                            $warehouseKey = (string) ($campaignId . ':' . ($warehouseId ?: $warehouseName));
+
+                            if (! array_key_exists($warehouseKey, $aggregated[$offerId])) {
+                                $aggregated[$offerId][$warehouseKey] = [
+                                    'warehouse_id' => is_numeric($warehouseId) ? (int) $warehouseId : null,
+                                    'warehouse_name' => $warehouseName,
+                                    'campaign_id' => $campaignId,
+                                    'stock' => 0.0,
+                                ];
+                            }
+
+                            $aggregated[$offerId][$warehouseKey]['stock'] += $amount;
+                        }
+                    }
+
+                    continue;
+                }
+
+                $offers = Arr::get($result, 'offers')
+                    ?? Arr::get($result, 'offerStocks')
+                    ?? Arr::get($result, 'skus')
+                    ?? [];
+
+                foreach ((array) $offers as $offerStock) {
+                    if (! is_array($offerStock)) {
+                        continue;
+                    }
+
+                    $offerId = trim((string) (
+                        data_get($offerStock, 'offerId')
+                        ?? data_get($offerStock, 'offer.offerId')
+                        ?? data_get($offerStock, 'sku')
+                        ?? data_get($offerStock, 'shopSku')
+                    ));
+
+                    if ($offerId === '') {
+                        continue;
+                    }
+
+                    if (! array_key_exists($offerId, $aggregated)) {
+                        $aggregated[$offerId] = [];
+                    }
+
+                    $warehouseStocks = data_get($offerStock, 'warehouseStocks')
+                        ?? data_get($offerStock, 'stocks')
+                        ?? data_get($offerStock, 'warehouses')
+                        ?? [];
+
+                    if (is_array($warehouseStocks) && $warehouseStocks !== []) {
+                        foreach ($warehouseStocks as $warehouseStock) {
+                            if (! is_array($warehouseStock)) {
+                                continue;
+                            }
+
+                            $amount = self::extractStockAmount($warehouseStock);
+
+                            if ($amount === null) {
+                                continue;
+                            }
+
+                            $warehouseId = data_get($warehouseStock, 'warehouseId');
+                            $apiWarehouseName = data_get($warehouseStock, 'warehouseName')
+                                ?? data_get($warehouseStock, 'name');
+                            $warehouseName = $this->getWarehouseDisplayName($warehouseId, $apiWarehouseName);
+
+                            $warehouseKey = (string) ($warehouseId ?: $warehouseName);
+
+                            if (! array_key_exists($warehouseKey, $aggregated[$offerId])) {
+                                $aggregated[$offerId][$warehouseKey] = [
+                                    'warehouse_id' => is_numeric($warehouseId) ? (int) $warehouseId : null,
+                                    'warehouse_name' => $warehouseName,
+                                    'campaign_id' => $campaignId,
+                                    'stock' => 0.0,
+                                ];
+                            }
+
+                            $aggregated[$offerId][$warehouseKey]['stock'] += $amount;
+                        }
+
+                        continue;
+                    }
+
+                    $totalAmount = self::extractStockAmount($offerStock);
+
+                    if ($totalAmount === null) {
+                        continue;
+                    }
+
+                    $fallbackKey = 'campaign:' . $campaignId;
+
+                    if (! array_key_exists($fallbackKey, $aggregated[$offerId])) {
+                        $aggregated[$offerId][$fallbackKey] = [
+                            'warehouse_id' => null,
+                            'warehouse_name' => 'Кампания #' . $campaignId,
+                            'campaign_id' => $campaignId,
+                            'stock' => 0.0,
+                        ];
+                    }
+
+                    $aggregated[$offerId][$fallbackKey]['stock'] += $totalAmount;
+                }
+            }
+        }
+
+        $result = [];
+
+        foreach ($aggregated as $offerId => $warehousesMap) {
+            $warehouses = array_values(array_map(
+                static function (array $item): array {
+                    $item['stock'] = round((float) $item['stock'], 2);
+
+                    return $item;
+                },
+                $warehousesMap,
+            ));
+
+            usort($warehouses, static fn (array $a, array $b): int => (float) $b['stock'] <=> (float) $a['stock']);
+
+            $result[$offerId] = [
+                'market_stocks_total' => round((float) collect($warehouses)->sum('stock'), 2),
+                'market_stocks_by_warehouse' => $warehouses,
+            ];
+        }
+
+        return $result;
+    }
+
+    protected static function extractStockAmount(array $payload): ?float
+    {
+        foreach (['count', 'available', 'fit', 'amount', 'stockCount', 'warehouseStockCount'] as $key) {
+            $value = data_get($payload, $key);
+
+            if (is_numeric($value)) {
+                return (float) $value;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @param  array<int, array<string, mixed>>  $typedStocks
+     */
+    protected static function extractStockAmountFromTypedStocks(array $typedStocks): ?float
+    {
+        if ($typedStocks === []) {
+            return null;
+        }
+
+        $preferredTypes = ['AVAILABLE', 'FIT'];
+
+        foreach ($preferredTypes as $type) {
+            foreach ($typedStocks as $item) {
+                if (! is_array($item)) {
+                    continue;
+                }
+
+                if (strtoupper((string) data_get($item, 'type', '')) !== $type) {
+                    continue;
+                }
+
+                $count = data_get($item, 'count');
+
+                if (is_numeric($count)) {
+                    return (float) $count;
+                }
+            }
+        }
+
+        $sum = 0.0;
+        $hasNumeric = false;
+
+        foreach ($typedStocks as $item) {
+            if (! is_array($item)) {
+                continue;
+            }
+
+            $count = data_get($item, 'count');
+
+            if (! is_numeric($count)) {
+                continue;
+            }
+
+            $sum += (float) $count;
+            $hasNumeric = true;
+        }
+
+        return $hasNumeric ? $sum : null;
     }
     /**
      * Преобразует fallbackFields в человекочитаемые подписи

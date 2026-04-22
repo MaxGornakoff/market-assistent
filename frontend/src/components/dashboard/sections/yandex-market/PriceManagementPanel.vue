@@ -9,6 +9,13 @@ interface MarketServiceCostItem {
   currency: string
 }
 
+interface MarketWarehouseStockItem {
+  warehouse_id: number | null
+  warehouse_name: string
+  campaign_id: number | null
+  stock: number
+}
+
 interface YandexMarketProduct {
   id: number
   name: string
@@ -34,6 +41,8 @@ interface YandexMarketProduct {
   market_category_id: number | null
   market_sku: number | null
   market_url: string | null
+  market_stocks_total: number | null
+  market_stocks_by_warehouse: MarketWarehouseStockItem[]
 }
 
 interface YandexMarketCatalogProduct {
@@ -54,13 +63,12 @@ export type ColumnKey =
   | 'market_price'
   | 'market_service_cost'
   | 'recommended_market_price'
+  | 'market_stocks_total'
   | 'offer_id'
   | 'sku'
   | 'category'
   | 'campaigns'
   | 'monitoring_enabled'
-  | 'delete'
-  | 'created_at'
   | 'delete'
   | 'created_at'
 
@@ -75,6 +83,7 @@ const defaultColumnOrder: ColumnKey[] = [
   'initial_price',
   'market_service_cost',
   'recommended_market_price',
+  'market_stocks_total',
   'market_price',
   'offer_id',
   'sku',
@@ -90,6 +99,7 @@ const columnDefinitions: TableColumnDefinition[] = [
   { key: 'initial_price', label: 'Начальная цена' },
   { key: 'market_service_cost', label: 'Расходы Маркета' },
   { key: 'recommended_market_price', label: 'Рекомендованная цена на ЯМ' },
+  { key: 'market_stocks_total', label: 'Остатки ЯМ (все склады)' },
   { key: 'market_price', label: 'Наша цена на ЯМ' },
   { key: 'offer_id', label: 'SKU' },
   { key: 'sku', label: 'Артикул Маркета' },
@@ -106,6 +116,7 @@ const defaultColumnVisibility: Record<ColumnKey, boolean> = {
   market_price: true,
   market_service_cost: true,
   recommended_market_price: true,
+  market_stocks_total: true,
   offer_id: true,
   sku: true,
   category: true,
@@ -255,6 +266,7 @@ const filteredProducts = computed(() => {
       product.sku ?? '',
       product.category ?? '',
       product.campaign_ids?.join(' ') ?? '',
+      String(product.market_stocks_total ?? ''),
       String(product.initial_price ?? ''),
       String(product.market_price ?? ''),
       String(product.market_service_cost ?? ''),
@@ -492,16 +504,53 @@ function handleColumnDrop(targetKey: ColumnKey) {
   draggedColumnKey.value = null
 }
 
+function getCurrencySymbol(code: string): string {
+  const symbols: Record<string, string> = {
+    RUR: '₽',
+    RUB: '₽',
+    USD: '$',
+    EUR: '€',
+  }
+  return symbols[code] || code
+}
+
 function formatMoney(value: number | null | undefined, currency = 'RUR') {
   if (value === null || value === undefined || Number.isNaN(Number(value))) {
     return '—'
   }
 
-  return new Intl.NumberFormat('ru-RU', {
-    style: 'currency',
-    currency,
+  const formattedValue = new Intl.NumberFormat('ru-RU', {
+    style: 'decimal',
     maximumFractionDigits: 0,
   }).format(Number(value))
+
+  const symbol = getCurrencySymbol(currency)
+  return `${formattedValue} ${symbol}`
+}
+
+function formatStock(value: number | null | undefined) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) {
+    return '—'
+  }
+
+  return new Intl.NumberFormat('ru-RU', {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
+  }).format(Number(value))
+}
+
+function formatProductName(name: string | null | undefined): string {
+  if (!name) {
+    return ''
+  }
+
+  // Если есть скобки, переносим часть со скобками на новую строку
+  const match = name.match(/^(.*?)\s*(\([^)]*\))$/)
+  if (match && match[1] && match[2]) {
+    return match[1].trim() + '\n' + match[2]
+  }
+
+  return name
 }
 
 function getRecommendedMarketPrice(product: YandexMarketProduct) {
@@ -763,7 +812,7 @@ onUnmounted(() => {
           <div class="flex items-start justify-between gap-4">
             <div>
               <p class="text-xs font-semibold uppercase tracking-[0.2em] text-blue-600">Карточка товара</p>
-              <h3 class="mt-2 text-xl font-semibold text-slate-900">{{ selectedProduct.name }}</h3>
+              <h3 class="mt-2 text-xl font-semibold text-slate-900 whitespace-pre-wrap">{{ formatProductName(selectedProduct.name) }}</h3>
               <p class="mt-1 text-sm text-slate-500">SKU: {{ selectedProduct.offer_id }}</p>
             </div>
 
@@ -853,6 +902,22 @@ onUnmounted(() => {
               <div class="mt-1 text-sm font-semibold text-slate-900">
                 {{ selectedProduct.campaign_ids?.length ? selectedProduct.campaign_ids.join(', ') : '—' }}
               </div>
+            </div>
+            <div class="rounded-2xl bg-slate-50 p-4 sm:col-span-2">
+              <div class="text-xs font-medium text-slate-500">Остатки ЯМ по всем складам</div>
+              <div class="mt-1 text-sm font-semibold text-slate-900">
+                {{ formatStock(selectedProduct.market_stocks_total) }}
+              </div>
+              <ul v-if="selectedProduct.market_stocks_by_warehouse?.length" class="mt-2 space-y-1 text-xs text-slate-600">
+                <li
+                  v-for="warehouse in selectedProduct.market_stocks_by_warehouse"
+                  :key="`${warehouse.campaign_id || 'no-campaign'}-${warehouse.warehouse_id || warehouse.warehouse_name}`"
+                  class="flex items-center justify-between gap-3"
+                >
+                  <span>{{ warehouse.warehouse_name }}</span>
+                  <span class="font-semibold text-slate-900">{{ formatStock(warehouse.stock) }}</span>
+                </li>
+              </ul>
             </div>
             <div v-if="selectedProduct.market_service_cost_breakdown?.length" class="rounded-2xl bg-slate-50 p-4 sm:col-span-2">
               <div class="text-xs font-medium text-slate-500">Детализация расходов</div>
@@ -999,7 +1064,7 @@ onUnmounted(() => {
                 @click="addCatalogProduct(product)"
               >
                 <div class="min-w-0 flex-1">
-                  <div class="truncate text-sm font-semibold text-slate-900">{{ product.name }}</div>
+                  <div class="text-sm font-semibold text-slate-900 whitespace-pre-wrap">{{ formatProductName(product.name) }}</div>
                   <div class="mt-1 text-xs text-slate-500">
                     SKU: {{ product.offer_id }} · Артикул Маркета: {{ product.sku || '—' }}
                   </div>
@@ -1287,7 +1352,7 @@ onUnmounted(() => {
             >
               <template v-for="column in visibleColumns" :key="`${product.id}-${column.key}`">
                 <td v-if="column.key === 'name'" class="min-w-70 px-3 py-3 font-medium text-slate-900 align-top">
-                  <div>{{ product.name }}</div>
+                  <div class="whitespace-pre-wrap">{{ formatProductName(product.name) }}</div>
                 </td>
 
                 <td v-else-if="column.key === 'initial_price'" class="min-w-40 max-w-50 px-3 py-3 align-top whitespace-nowrap">
@@ -1324,6 +1389,27 @@ onUnmounted(() => {
                   </div>
                   <div class="mt-0.5 text-xs text-slate-400">
                     {{ product.recommended_market_price_note || 'После комиссий выплата ≈ начальной цене' }}
+                  </div>
+                </td>
+
+                <td v-else-if="column.key === 'market_stocks_total'" class="min-w-55 max-w-70 px-3 py-3 align-top">
+                  <div v-if="!product.market_stocks_by_warehouse?.length" class="text-xs text-slate-400">
+                    Нет данных по складам
+                  </div>
+                  <div v-else class="space-y-1.5 flex gap-5">
+                    <div
+                      v-for="warehouse in product.market_stocks_by_warehouse"
+                      :key="`${warehouse.campaign_id}-${warehouse.warehouse_id}`"
+                      class="space-y-0.5"
+                    >
+                      
+                      <div class="text-sm font-semibold text-slate-900">
+                        {{ formatStock(warehouse.stock) }}
+                      </div>
+                      <div class="text-xs font-regular text-slate-400">
+                        {{ warehouse.warehouse_name }}
+                      </div>
+                    </div>
                   </div>
                 </td>
 
